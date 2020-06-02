@@ -176,7 +176,7 @@ description = "A framework-agnostic datasets library for Machine Learning resear
 name = "dataget"
 optional = false
 python-versions = ">=3.6,<4.0"
-version = "0.4.9"
+version = "0.4.10"
 
 [package.dependencies]
 aiofiles = ">=0.4.0,<0.5.0"
@@ -1717,8 +1717,8 @@ cycler = [
     {file = "cycler-0.10.0.tar.gz", hash = "sha256:cd7b2d1018258d7247a71425e9f26463dfb444d411c39569972f4ce586b0c9d8"},
 ]
 dataget = [
-    {file = "dataget-0.4.9-py3-none-any.whl", hash = "sha256:2fe06db3bb597513823a4bf273c138126a2cc40dc8b66998bf63598f9aca809b"},
-    {file = "dataget-0.4.9.tar.gz", hash = "sha256:abf71c730d593a07218f3b5388680466d65bd43713f0bbaed7aed2d95f4e33a0"},
+    {file = "dataget-0.4.10-py3-none-any.whl", hash = "sha256:d89a8c97917fa0a0ae08eabf1a1698f1ee103f999d1bba9bd0187703ce980529"},
+    {file = "dataget-0.4.10.tar.gz", hash = "sha256:8057ebcef51e26cac647f0d9891e6b85fe3fb4f19430cb4eba4b4de3f59d8853"},
 ]
 debugpy = [
     {file = "debugpy-1.0.0b9-cp27-cp27m-macosx_10_14_x86_64.whl", hash = "sha256:4d7317bd354a476ac468660409920f5eca5899d2b14320f6ab1616ab7d1a6c0f"},
