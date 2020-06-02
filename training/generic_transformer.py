@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 
-class GaussianNoise(BaseEstimator, TransformerMixin):
+class GenericTransformer(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         pass
 
