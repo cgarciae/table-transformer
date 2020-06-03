@@ -27,7 +27,7 @@ class LabelEncoder(LabelEncoder):
         :param data_list: A list of string
         :return: self
         """
-        X = np.array(X)
+        X = np.asarray(X)
         X = np.append(X, self._unknown).reshape(-1)
 
         return super().fit(X)
