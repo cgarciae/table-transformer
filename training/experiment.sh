@@ -1,0 +1,3 @@
+
+
+python -m training.experiment "$@"

@@ -1,12 +1,17 @@
-import tensorflow as tf
-import tensorflow_addons as tfa
-from imblearn.over_sampling import RandomOverSampler
-import pandas as pd
+from dataclasses import dataclass
 from pathlib import Path
-import typing as tp
-import numpy as np
-from sklearn.model_selection import train_test_split
 import shutil
+import typing as tp
+
+import dicto
+from imblearn.over_sampling import RandomOverSampler
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import skorch
+import torch
+from torch import embedding
+import torch.utils
 
 
 def split(df, params):
@@ -67,141 +72,116 @@ def preprocess(df, params, mode):
     return df
 
 
-def get_dataset(df, params, mode):
-    dataset = tf.data.Dataset.from_tensor_slices(
-        {col: df[col].to_numpy() for col in df}
+def get_dataset(df: pd.DataFrame, params: dicto.Dicto, mode: str):
+    return TableDataset(df, params.label_col)
+
+
+def get_model(
+    params: dicto.Dicto, n_categories: tp.Dict[str, int], numerical: tp.List[str]
+):
+    return TableTransformer(
+        categorical={col: n_categories[col] for col in n_categories},
+        numerical={col: params.continous_categories for col in numerical},
+        embeddings_size=params.embeddings_size * params.n_heads,
+        n_heads=params.n_heads,
+        num_layers=params.num_layers,
     )
 
-    if mode == "train":
-        dataset = dataset.repeat()
 
-    dataset = dataset.shuffle(100)
+@dataclass
+class TableDataset(torch.utils.data.Dataset):
+    df: pd.DataFrame
+    label_col: str
 
-    dataset = dataset.map(lambda d: (dict(x0=d["x0"], x1=d["x1"]), d["y"]))
-    dataset = dataset.batch(params.batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(1)
+    def __len__(self):
+        return len(self.df)
 
-    return dataset
-
-
-def get_model(params) -> tf.keras.Model:
-
-    x0 = tf.keras.Input(shape=(1,), name="x0")
-    x1 = tf.keras.Input(shape=(1,), name="x1")
-
-    inputs = [x0, x1]
-
-    # x0 embeddings
-
-    # x0 = tf.keras.layers.Dense(10, activation="relu")(x0)
-    # x0 = x0[:, None, :]
-
-    # x1 = tf.keras.layers.Dense(10, activation="relu")(x1)
-    # x1 = x1[:, None, :]
-
-    x = tf.concat([x0, x1], axis=1)
-
-    x = tf.keras.layers.Dense(512, activation="relu")(x)
-    x = tf.keras.layers.Dense(512, activation="relu")(x)
-
-    # x = AddPositionalEmbeddings()(x)
-    # x = SelfAttentionBlock(10, head_size=10, num_heads=8)(x)
-    # x = SelfAttentionBlock(10, head_size=10, num_heads=8)(x)
-    # x = SelfAttentionBlock(10, head_size=10, num_heads=8)(x)
-    # x = AttentionPooling(10, n_queries=1, head_size=10, num_heads=8)(x)
-
-    # x = x[:, 0]
-    # x = tf.keras.layers.GlobalAveragePooling1D()(x)
-
-    x = tf.keras.layers.Dense(1, activation="sigmoid", name="y")(x)
-
-    model = tf.keras.Model(inputs=inputs, outputs=x, name="tabular_attention")
-
-    return model
-
-
-class AddPositionalEmbeddings(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.embeddings: tp.Optional[tf.Variable] = None
-
-    def build(self, input_shape):
-
-        input_shape = list(input_shape)
-
-        self.embeddings = self.add_weight(
-            name="key_kernel", shape=[1] + input_shape[1:]
+    def __getitem__(self, i):
+        return (
+            {
+                col: torch.as_tensor(self.df.iloc[i][col])
+                for col in self.df
+                if col != self.label_col
+            },
+            torch.as_tensor(self.df.iloc[i][self.label_col]),
         )
 
-        super().build(input_shape)
 
-    def call(self, inputs):
-        return inputs + self.embeddings
-
-
-class SelfAttentionBlock(tf.keras.layers.Layer):
+class TableTransformer(torch.nn.Module):
     def __init__(
         self,
-        output_size: int,
-        head_size: int = 16,
-        num_heads: int = 3,
-        dropout: float = 0.0,
-        activation: tp.Union["str", tp.Callable] = "relu",
-        **kwargs
+        categorical: tp.Dict[str, int],
+        numerical: tp.Dict[str, int],
+        embeddings_size: int,
+        n_heads: int,
+        num_layers: int,
     ):
-        super().__init__(**kwargs)
-
-        self.mha = tfa.layers.MultiHeadAttention(
-            head_size=head_size, num_heads=num_heads, dropout=dropout
+        super().__init__()
+        self.categorical = torch.nn.ModuleDict(
+            {
+                key: torch.nn.Sequential(
+                    torch.nn.Embedding(n_categories, embeddings_size),
+                    ColumnBias(embeddings_size),
+                )
+                for key, n_categories in categorical.items()
+            }
         )
-        self.dense = tf.keras.layers.Dense(output_size, activation=activation)
+        self.numerical = torch.nn.ModuleDict(
+            {
+                key: torch.nn.Sequential(
+                    torch.nn.Embedding(n_categories, embeddings_size),
+                    ColumnBias(embeddings_size),
+                )
+                for key, n_categories in numerical.items()
+            }
+        )
+        self.transformer = torch.nn.TransformerEncoder(
+            torch.nn.TransformerEncoderLayer(
+                d_model=embeddings_size,
+                dim_feedforward=embeddings_size // 2,
+                nhead=n_heads,
+            ),
+            num_layers=num_layers,
+        )
 
-    def call(self, inputs):
+        self.categorical_list = list(categorical.keys())
+        self.numerical_list = list(numerical.keys())
 
-        x = self.mha([inputs, inputs])
-        x = self.dense(x)
+    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> torch.Tensor:
+
+        categorical = torch.stack(
+            [self.categorical[col](inputs[col]) for col in self.categorical_list], dim=1
+        )
+
+        numerical = torch.stack(
+            [self.numerical[col](inputs[col]) for col in self.numerical_list], dim=1
+        )
+
+        x = torch.cat([categorical, numerical], dim=1)
 
         return x
 
 
-class AttentionPooling(tf.keras.layers.Layer):
-    def __init__(
-        self,
-        output_size: int,
-        n_queries: int,
-        head_size: int = 16,
-        num_heads: int = 3,
-        dropout: float = 0.0,
-        activation: tp.Union["str", tp.Callable] = "relu",
-        **kwargs
-    ):
-        super().__init__(**kwargs)
+class ColumnBias(torch.nn.Module):
+    def __init__(self, size: int):
+        super().__init__()
+        self.bias = torch.nn.Parameter(torch.Tensor(1, size))
 
-        self.n_queries = n_queries
-        self.mha = tfa.layers.MultiHeadAttention(
-            head_size=head_size, num_heads=num_heads, dropout=dropout
-        )
-        self.dense = tf.keras.layers.Dense(output_size, activation=activation)
-        self.query: tp.Optional[tf.Variable] = None
+    def extra_repr(self):
+        return f"{self.bias.shape[-1]}"
 
-    def build(self, input_shape):
+    def forward(self, x):
+        return self.bias + x
 
-        num_features = input_shape[-1]
 
-        self.query = self.add_weight(
-            name="key_kernel", shape=[1, self.n_queries, num_features]
-        )
+if __name__ == "__main__":
 
-        super().build(input_shape)
+    x = torch.rand(10, 5)
+    print(x)
 
-    def call(self, inputs):
+    x = ColumnBias(5)(x)
+    print(x)
 
-        query = tf.tile(
-            self.query, [tf.shape(inputs)[0]] + [1] * (len(inputs.shape) - 1)
-        )
+    table_transformer = TableTransformer(categorical=dict(x=(10, 4)), numerical={})
 
-        x = self.mha([query, inputs])
-        x = self.dense(x)
-
-        return x
+    print(table_transformer)

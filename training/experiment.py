@@ -9,12 +9,15 @@ import dataget
 import dicto
 import pandas as pd
 import typer
-import tensorflow as tf
 import numpy as np
 from plotly import graph_objects as go
+import pickle
+from sklearn.model_selection import train_test_split
+import skorch
 
 # from .
 from . import estimator
+from .generic_transformer import GenericTransformer
 
 
 def main(
@@ -22,6 +25,7 @@ def main(
     cache: bool = False,
     viz: bool = False,
     debug: bool = False,
+    toy: bool = False,
 ):
     if debug:
         import debugpy
@@ -32,20 +36,54 @@ def main(
 
     params = dicto.load(params_path)
 
-    df_train, df_test = dataget.kaggle(competition="cat-in-the-dat-ii").get(
-        files=["train.csv", "test.csv"]
-    )
+    train_cache = Path("cache/train.csv")
+    test_cache = Path("cache/test.csv")
+    transformer_cache = Path("cache/transformer.pkl")
+
+    if cache and train_cache.exists():
+        df_train = pd.read_csv(train_cache)
+        df_test = pd.read_csv(test_cache)
+        transformer = pickle.load(transformer_cache.open("rb"))
+    else:
+        df, df_real = dataget.kaggle(competition="cat-in-the-dat-ii").get(
+            files=["train.csv", "test.csv"]
+        )
+
+        df.drop(columns=["id"], inplace=True)
+
+        df_train, df_test = estimator.split(df, params)
+
+        if toy:
+            df_train = df_train.sample(n=1000)
+            df_test = df_test.sample(n=1000)
+
+        transformer = GenericTransformer(
+            categorical=params.categorical, numerical=params.numerical,
+        )
+
+        df_train = transformer.fit_transform(df_train)
+        df_test = transformer.transform(df_test)
+
+        df_train.to_csv(train_cache, index=False)
+        df_test.to_csv(test_cache, index=False)
+        pickle.dump(transformer, transformer_cache.open("wb"))
+
+    print(df_train)
+    print(df_test)
 
     ds_train = estimator.get_dataset(df_train, params, "train")
     ds_test = estimator.get_dataset(df_test, params, "test")
 
-    model = estimator.get_model(params)
+    print(ds_train[:10])
+    print(ds_test[:10])
 
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(params.lr),
-        loss="binary_crossentropy",
-        metrics=["accuracy"],
+    model = estimator.get_model(
+        params, n_categories=transformer.n_categories, numerical=[]
     )
+    print(model)
+    exit()
+
+    net = skorch.NeuralNet(model,)
 
     model.summary()
 
